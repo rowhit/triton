@@ -450,6 +450,7 @@ unpackPhase() {
     exit 1
   fi
 
+  srcRoot="$(readlink -f "$srcRoot")"
   echo "source root is $srcRoot"
 
   # By default, add write permission to the sources.  This is often
@@ -465,6 +466,17 @@ unpackPhase() {
 patchPhase() {
   runHook 'prePatch'
 
+  local substituteArgs=()
+  local key
+  for key in "${!patchVars[@]}"; do
+    substituteArgs+=(
+      "--replace"
+      "@$key@"
+      "${patchVars["$key"]}"
+    )
+  done
+
+  local i
   for i in $patches; do
     header "applying patch $i" '3'
     local uncompress='cat'
@@ -475,7 +487,11 @@ patchPhase() {
       *.lzma) uncompress='lzma -d' ;;
     esac
     # "2>&1" is a hack to make patch fail if the decompressor fails (nonexistent patch, etc.)
-    $uncompress < "$i" 2>&1 | patch ${patchFlags:--p1}
+    local patchFile="$TMPDIR/.patch.tmp"
+    $uncompress <"$i" >"$patchFile"
+    substituteInPlace "$patchFile" "${substituteArgs[@]}"
+    patch ${patchFlags:--p1} <"$patchFile"
+    rm "$patchFile"
     stopNest
   done
 
@@ -486,44 +502,75 @@ libtoolFix() {
   sed -i -e 's^eval sys_lib_.*search_path=.*^^' "$1"
 }
 
-configurePhase() {
-  runHook 'preConfigure'
+configureBuildRoot() {
+  if [ -z "$buildRoot" ]; then
+    if [ -n "${createBuildRoot-true}" ]; then
+      mkdir -p "$NIX_BUILD_TOP"/build
+      cd "$NIX_BUILD_TOP"/build
+    fi
+    buildRoot="$(pwd)"
+  fi
+  buildRoot="$(readlink -f "$buildRoot")"
+}
 
+autotoolsConfigureAction() {
   if [ -z "$configureScript" -a -x ./configure ]; then
     configureScript=./configure
   fi
 
+  if [ ! -x "$configureScript" ]; then
+    echo "Skipping configure due to missing executable configure script: $configureScript" >&2
+    return 0
+  fi
+  configureScript="$(readlink -f "$configureScript")"
+
+  configureBuildRoot
+
   if [ -n "${fixLibtool-true}" ]; then
-    find . -iname "ltmain.sh" | while read i; do
+    find . -iname "ltmain.sh" | while read i ; do
       echo "fixing libtool script $i"
       libtoolFix "$i"
     done
   fi
 
   if [ -n "${addPrefix-true}" ]; then
-    configureFlags="${prefixKey:---prefix=}$prefix $configureFlags"
+    configureFlagsArray+=("${prefixKey:---prefix=}$prefix")
   fi
 
   # Add --disable-dependency-tracking to speed up some builds.
   if [ -n "${addDisableDepTrack-true}" ]; then
     if grep -q dependency-tracking "$configureScript" 2>/dev/null; then
-      configureFlags="--disable-dependency-tracking $configureFlags"
+      configureFlagsArray+=("--disable-dependency-tracking")
     fi
   fi
 
   # By default, disable static builds.
   if [ -n "${disableStatic-true}" ]; then
     if grep -q enable-static "$configureScript" 2>/dev/null; then
-      configureFlags="--disable-static $configureFlags"
+      configureFlagsArray+=("--disable-static")
     fi
   fi
 
-  if [ -n "$configureScript" ]; then
-    echo "configure flags: $configureFlags ${configureFlagsArray[@]}"
-    $configureScript $configureFlags "${configureFlagsArray[@]}"
-  else
-    echo "no configure script, doing nothing"
-  fi
+  local actualFlags
+  actualFlags=(
+    $configureFlags
+    "${configureFlagsArray[@]}"
+  )
+
+  echo "Using build root: $buildRoot" >&2
+  echo "Using configure script: $configureScript" >&2
+  printFlags 'autotools configure'
+  $configureScript "${actualFlags[@]}"
+}
+
+if [ -z "$configureAction" ]; then
+  configureAction='autotoolsConfigureAction'
+fi
+
+configurePhase() {
+  runHook 'preConfigure'
+
+  runHook 'configureAction'
 
   runHook 'postConfigure'
 }
@@ -535,32 +582,32 @@ commonMakeFlags() {
   local parallelVar
   parallelVar="parallel${phaseName^}"
 
-  actualMakeFlags=()
+  local actualFlags=()
   if [ -n "$makefile" ]; then
-    actualMakeFlags+=('-f' "$makefile")
+    actualFlags+=('-f' "$makefile")
   fi
   if [ -n "${!parallelVar-true}" ]; then
-    actualMakeFlags+=("-j${NIX_BUILD_CORES}" "-l${NIX_BUILD_CORES}" "-O")
+    actualFlags+=("-j${NIX_BUILD_CORES}" "-l${NIX_BUILD_CORES}" "-O")
   fi
-  actualMakeFlags+=("SHELL=$SHELL") # Needed for https://github.com/NixOS/nixpkgs/pull/1354#issuecomment-31260409
-  actualMakeFlags+=($makeFlags)
-  actualMakeFlags+=("${makeFlagsArray[@]}")
+  actualFlags+=("SHELL=$SHELL") # Needed for https://github.com/NixOS/nixpkgs/pull/1354#issuecomment-31260409
+  actualFlags+=($makeFlags)
+  actualFlags+=("${makeFlagsArray[@]}")
   local flagsVar
   flagsVar="${phaseName}Flags"
-  actualMakeFlags+=(${!flagsVar})
+  actualFlags+=(${!flagsVar})
   local arrayVar
   arrayVar="${phaseName}FlagsArray[@]"
-  actualMakeFlags+=("${!arrayVar}")
+  actualFlags+=("${!arrayVar}")
 }
 
-printMakeFlags() {
+printFlags() {
   local phaseName
   phaseName="$1"
 
   echo "$phaseName flags:"
 
   local flag
-  for flag in "${actualMakeFlags[@]}"; do
+  for flag in "${actualFlags[@]}"; do
     echo "  $flag"
   done
 }
@@ -571,10 +618,10 @@ buildPhase() {
   if [ -z "$makeFlags" ] && ! [ -n "$makefile" -o -e "Makefile" -o -e "makefile" -o -e "GNUmakefile" ]; then
     echo "no Makefile, doing nothing"
   else
-    local actualMakeFlags
+    local actualFlags
     commonMakeFlags 'build'
-    printMakeFlags 'build'
-    make "${actualMakeFlags[@]}"
+    printFlags 'build'
+    make "${actualFlags[@]}"
   fi
 
   runHook 'postBuild'
@@ -583,12 +630,12 @@ buildPhase() {
 checkPhase() {
   runHook 'preCheck'
 
-  local actualMakeFlags
+  local actualFlags
   commonMakeFlags 'check'
-  actualMakeFlags+=(${checkFlags:-VERBOSE=y})
-  actualMakeFlags+=(${checkTarget:-check})
-  printMakeFlags 'check'
-  make "${actualMakeFlags[@]}"
+  actualFlags+=(${checkFlags:-VERBOSE=y})
+  actualFlags+=(${checkTarget:-check})
+  printFlags 'check'
+  make "${actualFlags[@]}"
 
   runHook 'postCheck'
 }
@@ -598,11 +645,11 @@ installPhase() {
 
   mkdir -p "$prefix"
 
-  local actualMakeFlags
+  local actualFlags
   commonMakeFlags 'install'
-  actualMakeFlags+=(${installTargets:-install})
-  printMakeFlags 'install'
-  make "${actualMakeFlags[@]}"
+  actualFlags+=(${installTargets:-install})
+  printFlags 'install'
+  make "${actualFlags[@]}"
 
   runHook 'postInstall'
 }
@@ -698,17 +745,38 @@ distPhase() {
 
 showPhaseHeader() {
   local phase="$1"
-  case "$phase" in
-    'unpackPhase') header 'unpacking sources' ;;
-    'patchPhase') header 'patching sources' ;;
-    'configurePhase') header 'configuring' ;;
-    'buildPhase') header 'building' ;;
-    'checkPhase') header 'running tests' ;;
-    'installPhase') header 'installing' ;;
-    'fixupPhase') header 'post-installation fixup' ;;
-    'fixupCheckPhase') header 'post-installation fixup checks' ;;
-    'installCheckPhase') header 'running install tests' ;;
-    *) header "$phase" ;;
+
+  case $phase in
+    'unpackPhase')
+      header "############### unpacking sources $name ###############"
+      ;;
+    'patchPhase')
+      header "############### patching sources  $name ###############"
+      ;;
+    'configurePhase')
+      header "############### configuring       $name ###############"
+      ;;
+    'buildPhase')
+      header "############### building          $name ###############"
+      ;;
+    'checkPhase')
+      header "############### testing           $name ###############"
+      ;;
+    'installPhase')
+      header "############### installing        $name ###############"
+      ;;
+    'fixupPhase')
+      header "############### fixup             $name ###############"
+      ;;
+    'fixupCheckPhase')
+      header "############### fixup-check       $name ###############"
+      ;;
+    'installCheckPhase')
+      header "############### install testing   $name ###############"
+      ;;
+    *)
+      header "############## $phase             $name ###############"
+      ;;
   esac
 }
 
@@ -788,6 +856,8 @@ preInstallPhases=($preInstallPhases)
 preFixupPhases=($preFixupPhases)
 preDistPhases=($preDistPhases)
 postPhases=($postPhases)
+
+arrayToDict patchVars
 
 PATH_DELIMITER=':'
 

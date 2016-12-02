@@ -1,15 +1,11 @@
 { stdenv
 , fetchurl
+
 , channel
 }:
 
 let
   sources = {
-    "3.18" = {
-      major = "3";
-      version = "3.18.14";
-      sha256 = "1xh0vvn1l2g1kkg54f0mg0inbpsiqs24ybgsakksmcpcadjgqk1i";
-    };
     "4.4" = {
       major = "4";
       version = "4.4.57";
@@ -23,28 +19,41 @@ let
   };
 
   source = sources."${channel}";
+  inherit (sources."${channel}")
+    major
+    sha256
+    version;
+
+  headerArch = {
+    "x86_64-linux" = "x86_64";
+    "i686-linux" = "i686";
+  };
 
   tarballUrls = [
-    "mirror://kernel/linux/kernel/v${source.major}.x/linux-${source.version}.tar"
+    "mirror://kernel/linux/kernel/v${major}.x/linux-${version}.tar"
   ];
 in
 stdenv.mkDerivation rec {
-  name = "linux-headers-${source.version}";
-  version = source.version;
+  name = "linux-headers-${version}";
 
   src = fetchurl {
     urls = map (n: "${n}.xz") tarballUrls;
     hashOutput = false;
-    inherit (source) sha256;
+    inherit sha256;
   };
 
-  buildFlags = [
-    "defconfig"
-  ];
+  # There is no build process. Work is done entirely done by headers_install
+  buildPhase = ''
+    true
+  '';
 
   preInstall = ''
     installFlagsArray+=("INSTALL_HDR_PATH=$out")
   '';
+
+  installFlags = [
+    "ARCH=${headerArch."${stdenv.targetSystem}"}"
+  ];
 
   installTargets = "headers_install";
 
@@ -53,7 +62,15 @@ stdenv.mkDerivation rec {
     find $out/include \( -name .install -o -name ..install.cmd \) -delete
   '';
 
+  # We don't need to fix the flags as this build comes early and
+  # binaries are only used for supporting the build process
+  ccFixFlags = false;
+
+  # The linux-headers do not need to maintain any references
+  allowedReferences = [ ];
+
   passthru = {
+    inherit channel;
     srcVerification = fetchurl {
       failEarly = true;
       pgpDecompress = true;

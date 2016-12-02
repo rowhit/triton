@@ -281,47 +281,16 @@ let  # BEGIN let/in 1
   #  importMeta = args.meta or {};
   #};
 
-  #buildMaven = callPackage ../build-support/build-maven.nix {};
-
   cmark = callPackage ../development/libraries/cmark { };
-
-  #dockerTools = callPackage ../build-support/docker { };
-
-  fetchbower = callPackage ../build-support/fetchbower {
-    inherit (nodePackages) fetch-bower;
-  };
-
-  fetchbzr = callPackage ../build-support/fetchbzr { };
-
-  #fetchcvs = callPackage ../build-support/fetchcvs { };
-
-  #fetchdarcs = callPackage ../build-support/fetchdarcs { };
 
   fetchgit = callPackage ../build-support/fetchgit { };
 
-  fetchgitPrivate = callPackage ../build-support/fetchgit/private.nix { };
-
-  fetchgitrevision =
-    import ../build-support/fetchgitrevision runCommand pkgs.git;
-
-  fetchgitLocal = callPackage ../build-support/fetchgitlocal { };
-
   fetchpatch = callPackage ../build-support/fetchpatch { };
 
-  fetchsvn = callPackage ../build-support/fetchsvn {
-    sshSupport = true;
-  };
-
-  fetchsvnrevision =
-    import ../build-support/fetchsvnrevision runCommand pkgs.subversion;
-
-  fetchsvnssh = callPackage ../build-support/fetchsvnssh {
-    sshSupport = true;
-  };
+  fetchsvn = callPackage ../build-support/fetchsvn { };
 
   fetchhg = callPackage ../build-support/fetchhg { };
 
-  # `fetchurl' downloads a file from the network.
   fetchurl = callPackage ../build-support/fetchurl { };
 
   fetchTritonPatch = { rev, file, sha256 }: pkgs.fetchurl {
@@ -552,13 +521,12 @@ let  # BEGIN let/in 1
 
 
 wrapCCWith = ccWrapper: libc: extraBuildCommands: baseCC: ccWrapper {
-  nativeTools = pkgs.stdenv.cc.nativeTools or false;
-  nativeLibc = pkgs.stdenv.cc.nativeLibc or false;
-  nativePrefix = pkgs.stdenv.cc.nativePrefix or "";
+  impureLibc = null;
+  impurePrefix = null;
   cc = baseCC;
-  isGNU = baseCC.isGNU or false;
-  isClang = baseCC.isClang or false;
-  inherit libc extraBuildCommands;
+  inherit
+    libc
+    extraBuildCommands;
 };
 
 wrapCC =
@@ -742,6 +710,8 @@ bind = callPackage ../all-pkgs/b/bind { };
 bind_tools = callPackageAlias "bind" {
   suffix = "tools";
 };
+
+binutils = callPackage ../all-pkgs/b/binutils { };
 
 bison = callPackage ../all-pkgs/b/bison { };
 
@@ -1353,6 +1323,14 @@ gawk = callPackage ../all-pkgs/g/gawk { };
 
 gcab = callPackage ../all-pkgs/g/gcab { };
 
+gcc_unwrapped_7 = callPackage ../all-pkgs/g/gcc {
+  channel = "7";
+};
+gcc_unwrapped = callPackageAlias "gcc_unwrapped_7" { };
+
+gcc_7 = wrapCC (callPackageAlias "gcc_unwrapped_7" { });
+gcc = hiPrio (callPackageAlias "gcc_7" { });
+
 gconf = callPackage ../all-pkgs/g/gconf { };
 
 gcr = callPackage ../all-pkgs/g/gcr { };
@@ -1424,6 +1402,8 @@ glew = callPackage ../all-pkgs/g/glew { };
 glfw = callPackage ../all-pkgs/g/glfw { };
 
 glib = callPackage ../all-pkgs/g/glib { };
+
+glibc = callPackage ../all-pkgs/g/glibc { };
 
 glib-networking_2-50 = callPackage ../all-pkgs/g/glib-networking {
   channel = "2.50";
@@ -2305,8 +2285,6 @@ libmnl = callPackage ../all-pkgs/l/libmnl { };
 
 libmodplug = callPackage ../all-pkgs/l/libmodplug { };
 
-libmpc = callPackage ../all-pkgs/l/libmpc { };
-
 libmpdclient = callPackage ../all-pkgs/l/libmpdclient { };
 
 libmpeg2 = callPackage ../all-pkgs/l/libmpeg2 {
@@ -2652,8 +2630,6 @@ lzip = callPackage ../all-pkgs/l/lzip { };
 
 lzo = callPackage ../all-pkgs/l/lzo { };
 
-m4 = callPackageAlias "gnum4" { };
-
 mac = callPackage ../all-pkgs/m/mac { };
 
 man = callPackage ../all-pkgs/m/man { };
@@ -2742,6 +2718,8 @@ motif = callPackage ../all-pkgs/m/motif { };
 mp3val = callPackage ../all-pkgs/m/mp3val { };
 
 mp4v2 = callPackage ../all-pkgs/m/mp4v2 { };
+
+mpc = callPackage ../all-pkgs/m/mpc { };
 
 mpd = callPackage ../all-pkgs/m/mpd {
   avahi = null;
@@ -2887,6 +2865,8 @@ networkmanager-vpnc_1-2 = callPackage ../all-pkgs/n/networkmanager-vpnc {
   channel = "1.2";
 };
 networkmanager-vpnc = callPackageAlias "networkmanager-vpnc_1-2" { };
+
+newlib = callPackage ../all-pkgs/n/newlib { };
 
 nfacct = callPackage ../all-pkgs/n/nfacct { };
 
@@ -3850,7 +3830,6 @@ xorg = recurseIntoAttrs (
       libtool
       libunwind
       libxslt
-      m4
       makeWrapper
       mcpp
       mtdev
@@ -4049,62 +4028,6 @@ zstd = callPackage ../all-pkgs/z/zstd { };
   systemd-cryptsetup-generator =
     callPackage ../os-specific/linux/systemd/cryptsetup-generator.nix { };
 #
-  gcc = callPackageAlias "gcc7" { };
-#
-  gcc48 = lowPrio (wrapCC (callPackage ../development/compilers/gcc/4.8 {
-    noSysDirs = true;
-
-    # PGO seems to speed up compilation by gcc by ~10%, see #445 discussion
-    profiledCompiler = true;
-
-    # When building `gcc.crossDrv' (a "Canadian cross", with host == target
-    # and host != build), `cross' must be null but the cross-libc must still
-    # be passed.
-    cross = null;
-    libcCross = null;
-
-    isl = pkgs.isl_0_14;
-  }));
-#
-  gcc5 = lowPrio (wrapCC (callPackage ../development/compilers/gcc/5 {
-    noSysDirs = true;
-
-    # PGO seems to speed up compilation by gcc by ~10%, see #445 discussion
-    profiledCompiler = true;
-
-    # When building `gcc.crossDrv' (a "Canadian cross", with host == target
-    # and host != build), `cross' must be null but the cross-libc must still
-    # be passed.
-    cross = null;
-    libcCross = null;
-  }));
-
-  gcc6 = lowPrio (wrapCC (callPackage ../development/compilers/gcc/6 {
-    noSysDirs = true;
-
-    # PGO seems to speed up compilation by gcc by ~10%, see #445 discussion
-    profiledCompiler = true;
-
-    # When building `gcc.crossDrv' (a "Canadian cross", with host == target
-    # and host != build), `cross' must be null but the cross-libc must still
-    # be passed.
-    cross = null;
-    libcCross = null;
-  }));
-
-  gcc7 = lowPrio (wrapCC (callPackage ../development/compilers/gcc/7 {
-    noSysDirs = true;
-
-    # PGO seems to speed up compilation by gcc by ~10%, see #445 discussion
-    profiledCompiler = true;
-
-    # When building `gcc.crossDrv' (a "Canadian cross", with host == target
-    # and host != build), `cross' must be null but the cross-libc must still
-    # be passed.
-    cross = null;
-    libcCross = null;
-  }));
-#
   haskell = callPackage ./haskell-packages.nix { };
 #
   haskellPackages = pkgs.haskell.packages.ghc7103.override {
@@ -4192,8 +4115,6 @@ zstd = callPackage ../all-pkgs/z/zstd { };
 #
   automoc4 = callPackage ../development/tools/misc/automoc4 { };
 #
-  binutils = callPackage ../development/tools/misc/binutils { };
-#
   doxygen = callPackage ../development/tools/documentation/doxygen {
     qt4 = null;
   };
@@ -4251,11 +4172,6 @@ cfitsio = callPackage ../development/libraries/cfitsio { };
   fribidi = callPackage ../development/libraries/fribidi { };
 #
   giblib = callPackage ../development/libraries/giblib { };
-#
-  glibc = callPackage ../development/libraries/glibc { };
-
-  # Only supported on Linux
-  glibcLocales = callPackage ../development/libraries/glibc/locales.nix { };
 #
   gom = callPackage ../all-pkgs/g/gom { };
 #

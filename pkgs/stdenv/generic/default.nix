@@ -231,6 +231,7 @@ let
       (removeAttrs attrs [
         "meta"
         "passthru"
+        "patchVars"
         "crossAttrs"
         "pos"
         "__impureHostDeps"
@@ -258,8 +259,7 @@ let
       system = result.system;
       userHook = config.stdenv.userHook or null;
       __ignoreNulls = true;
-
-      extraCCFlags = true;
+      patchVars = dictToArray (attrs.patchVars or { });
 
       # Inputs built by the cross compiler.
       buildInputs =
